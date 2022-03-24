@@ -1,0 +1,30 @@
+RESTART
+UNITS LENGTH=A TIME=ps
+
+vol: VOLUME
+
+cell: CELL 
+aaa: COMBINE ARG=cell.ax,cell.by,cell.cz POWERS=1,1,1 COEFFICIENTS=1,-1,0 PERIODIC=NO
+bbb: COMBINE ARG=cell.ax,cell.by,cell.cz POWERS=1,1,1 COEFFICIENTS=1,0,-1 PERIODIC=NO
+ccc: COMBINE ARG=cell.ax,cell.by,cell.cz POWERS=1,1,1 COEFFICIENTS=0,1,-1 PERIODIC=NO
+aniso: COMBINE ARG=aaa,bbb,ccc POWERS=2,2,2 PERIODIC=NO
+tri: COMBINE ARG=cell.bx,cell.cx,cell.cy POWERS=2,2,2 PERIODIC=NO
+
+METAD ...
+LABEL=metad
+ARG=aniso,tri
+PACE=200 HEIGHT=2.0 SIGMA=200 FILE=HILLS
+TEMP=1000 BIASFACTOR=100
+ADAPTIVE=DIFF SIGMA_MAX=2,2 SIGMA_MIN=0.06,0.06
+... METAD
+
+#wall: LOWER_WALLS ARG=cub.morethan-1 AT=900 KAPPA=2.0
+
+# monitor the two variables and the metadynamics bias potential
+PRINT STRIDE=10 ARG=vol,aaa,bbb,ccc,aniso,tri,metad.bias  FILE=COLVAR
+PRINT STRIDE=10 ARG=cell.*  FILE=CELL
+
+#DUMPMULTICOLVAR DATA=cub FILE=traj.xyz STRIDE=100
+
+ENDPLUMED
+

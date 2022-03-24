@@ -1,0 +1,29 @@
+# output options
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+LELF   = .FALSE.
+ADDGRID = .TRUE.
+   
+# ionic relaxation
+IBRION = -1
+ISIF = 2
+   
+# precision parameters
+EDIFF = 1E-8
+EDIFFG = -1E-6
+PREC = high
+  
+# electronic relaxation
+ISMEAR = -1
+SIGMA = 0.01
+ENCUT = 1000
+ENAUG = 1000
+NBANDS = 400
+GGA = PE
+   
+#k points
+KGAMMA = .TRUE.
+KSPACING = 0.3
+ 
+# performance
+KPAR = 8
