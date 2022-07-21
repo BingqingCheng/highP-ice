@@ -1,0 +1,184 @@
+# isotherm run
+
+###############################################################################
+# VARIABLES
+###############################################################################
+clear
+variable dt              equal  0.0005                                                  # timesestep (ps)
+variable intThermo       equal  10                                                      # screen output interval (timesteps)
+variable runnerCutoff    equal  6.3501269880                                            # largest symmetry function cutoff (Angstrom)
+variable mass2           equal  15.9994                                                 # mass for element 1 (O)  (g/mol)
+variable mass1           equal  1.0080                                                  # mass for element 2 (H) (g/mol)
+variable nameStartCfg    string "input-structure.dat                                    # name of the starting configuration file
+variable runnerDir       string "RUNNERDIR"                                             # directory containing RuNNer files
+# set initial velocity distribution
+variable velSeed equal 26135
+# dump thermodynamic properties (temperature, pressure, potential energy, kinetic energy, integrator quantity)
+variable varVolume       equal  vol                                                     # variable required to print volume
+variable varKE           equal  ke                                                      # variable required to print kinetic energy
+
+variable Tdamp           equal  0.02                                                    # thermostat damping factor (ps)
+variable Pdamp           equal  0.5                                                     # thermostat damping factor (ps)
+
+###############################################################################
+# SETUP
+###############################################################################
+units metal                                                                             # define unit system (metal = Angstrom, eV, ps, g/mol)
+boundary p p p                                                                          # set periodic boundary conditions
+atom_style atomic                                                                       # set atomic style for particles
+box tilt large
+read_data ${nameStartCfg}                                                               # read start configuration
+mass 1 ${mass1}                                                                         # set mass for element 1
+mass 2 ${mass2}
+
+#change_box all triclinic
+
+replicate 2 1 1
+
+neighbor       2.0 bin                                                                  # neighbour list skin width
+neigh_modify   every 1 delay 0 check yes                                                # frequency to update neighbour list
+
+pair_style hybrid/overlay nnp dir ${runnerDir} showew no showewsum 100 resetew yes maxew 100000 cflength 1.8897261328 cfenergy 0.0367493254 lj/cut  1.122462
+pair_coeff * * nnp ${runnerCutoff}        # set up pair style coefficients
+pair_coeff 1 1 lj/cut 1 0.35635949 0.4
+pair_coeff 1 2 lj/cut 10 0.65 0.7296033
+pair_coeff 2 2 lj/cut 100 1.0 1.122462
+
+timestep ${dt}                                                                          # set timestep
+
+
+variable avgOutputDelta equal 100                                                       # this is the interval at which samples are taken
+variable avgOutputSamples equal 300                                                     # this gives us the number of samples in the average
+variable avgOutputStep equal 30000                                                      # this gives us the number of steps at which to compute the average
+# If we wanted to take all the trajectory in between calculations into account, then avgOutputDelta*avgOutputSamples should equal avgOutputStep.
+# Although we're making changes to the target pressure, there is a separate equilibration step at the start of the loop; its duration can be varied if
+# the temperature changes more or less quickly, as appropriate.
+
+thermo ${avgOutputStep}
+
+variable        TrefInit        equal   1000.0                                          # target temperature
+
+# pressure settings
+variable        PrefAtEndHigh   equal   350000.0                                        # pressure at which to end run
+variable        PrefInit        equal   250000.0                                        # pressure of the first step
+
+variable        numIterHigh     equal abs(round((${PrefInit}-${PrefAtEndHigh})/5000))   # the denominator here gives the target pressure interval
+print "Will make ${numIterHigh} attempts"
+
+variable        currPres  equal    ${PrefInit}
+
+
+# the following fix will be removed shortly, as soon as we enter the loop, but it is needed for now, otherwise Lammps dies when we try to unfix it
+fix 5 all npt temp ${TrefInit} ${TrefInit} ${Tdamp} aniso ${currPres} ${currPres} ${Pdamp}
+
+group all type 1:2
+group h type 1
+group o type 2
+
+velocity all create ${TrefInit} ${velSeed} mom yes rot yes                                             # create initial velocities
+
+variable curVol equal vol
+variable curEnthalpy equal (etotal+(press*vol)*6.24150913e-7)/atoms  # the final multiplication is a unit conversion from bar*angstrom^3 to eV
+variable curIntegrand equal (etotal+(press*vol)*6.24150913e-7)/(atoms*(temp)^2)
+variable enthalpyAlt equal enthalpy
+
+fix myAverage all ave/time ${avgOutputDelta} ${avgOutputSamples} ${avgOutputStep} c_thermo_press c_thermo_pe v_curVol c_thermo_temp v_curEnthalpy v_curIntegrand v_enthalpyAlt
+
+variable currAvgP equal f_myAverage[1]
+variable currAvgPE equal f_myAverage[2]/atoms
+variable currVolPP equal f_myAverage[3]/atoms
+variable currNumDens equal atoms/(f_myAverage[3]+1e-99) # +1e-99 added to avoid the spurious 'division by zero' issue before the simulation has begun, when all averages are zero
+variable currAvgTemp equal f_myAverage[4]
+variable currAvgEnthalpy equal f_myAverage[5]
+variable currAvgIntegrand equal f_myAverage[6]
+variable currCellA equal cella
+variable currCellB equal cellb
+variable currCellC equal cellc
+variable currCellAlpha equal cellalpha
+variable currCellBeta equal cellbeta
+variable currCellGamma equal cellgamma
+
+
+thermo_style custom step temp press pe ke density cella cellb cellc cellalpha cellbeta cellgamma v_currAvgPE f_myAverage[1] f_myAverage[3] v_currNumDens v_currAvgPE v_currVolPP v_currAvgEnthalpy v_currAvgIntegrand v_curEnthalpy v_enthalpyAlt   # last two included to check unit conversion was correct
+
+thermo_modify flush yes
+
+print "#rho/A^-3 potentialEnergy/(eV) P/bar Ptarget/bar Tavg/K Ttarget/K v/A^3 avgEnthalpy/eV cellA cellB cellC cellAlpha cellBeta cellGamma" file isothermOutput.dat
+
+ dump dumpAll2 all xyz ${avgOutputStep} movie.xyz
+ dump_modify dumpAll2 element H O
+
+variable prevPressure equal ${PrefInit}
+
+## enter pressure loop
+variable loopVar loop 0 ${numIterHigh}
+   label loop2
+   variable currPres equal (1.0-${loopVar}/(${numIterHigh}+0.0))*${PrefInit}+(${loopVar}/(${numIterHigh}+0.0))*${PrefAtEndHigh}
+   print "variable ${loopVar}, currPress ${currPres}"
+   unfix 5
+   unfix myAverage
+   fix 5 all npt temp ${TrefInit} ${TrefInit} ${Tdamp} aniso ${prevPressure} ${currPres} ${Pdamp} # try to relax at least in part to the new pressure
+   thermo 800
+   thermo_style custom step temp press pe ke density
+   run 4000                                                                             # initial equilibration after changing pressure
+   unfix 5
+   reset_timestep 0
+
+   compute msd1 h msd com yes
+   compute msd2 o msd com yes
+   variable t equal time
+   variable xh equal c_msd1[1]
+   variable xo equal c_msd2[1]
+   variable yh equal c_msd1[2]
+   variable yo equal c_msd2[2]
+   variable zh equal c_msd1[3]
+   variable zo equal c_msd2[3]
+   variable dh equal c_msd1[4]
+   variable do equal c_msd2[4]
+   fix mymsdF all print 100 "${t} ${xh} ${yh} ${zh} ${dh} ${xo} ${yo} ${zo} ${do}" file msd-T${TrefInit}-P${currPres}.dat
+
+   compute myrdfC all rdf 90 1 1 1 2 2 1 2 2
+   fix myrdfF all ave/time ${avgOutputDelta} ${avgOutputSamples} ${avgOutputStep} c_myrdfC[*] file rdf-T${TrefInit}-P${currPres}.dat mode vector
+
+   thermo ${avgOutputStep}
+   fix myAverage all ave/time ${avgOutputDelta} ${avgOutputSamples} ${avgOutputStep} c_thermo_press c_thermo_pe v_curVol c_thermo_temp v_curEnthalpy v_curIntegrand v_enthalpyAlt
+   thermo_style custom step temp press pe ke density cella cellb cellc cellalpha cellbeta cellgamma v_currAvgPE f_myAverage[1] f_myAverage[3] v_currNumDens v_currAvgPE v_currVolPP v_currAvgEnthalpy v_currAvgIntegrand v_curEnthalpy v_enthalpyAlt   # last two included to check unit conversion was correct
+   fix 5 all npt temp ${TrefInit} ${TrefInit} ${Tdamp} aniso ${currPres} ${currPres} ${Pdamp}
+
+   # the following loop computes the mean displacements after 0.4 ps (i.e. 800 time steps of 0.0005 ps each); this is hardcoded
+   label          loopDD
+      variable       nn loop 1 1
+      print          "defining nn ${nn}"
+      compute        msd_${nn} h msd com yes
+      variable msdHH${nn} equal sqrt(c_msd_${nn}[4])
+      variable        check atom "step % 800 == 0"
+      compute myDisplacement${nn} h displace/atom refresh check
+      fix            msd_output_${nn} all ave/time 200 5 2000 c_msd_${nn}[4] v_msdHH${nn} file varmsd-T${TrefInit}-P${currPres}-nn${nn}.dat
+      fix disp_output_${nn} h ave/histo 800 1 800  0.0 7.0 500 c_myDisplacement${nn}[4] mode vector kind peratom start 100 file vardisp-T${TrefInit}-P${currPres}-nn${nn}.dat ave one
+      dump            tempDump${nn} h custom 800 tmp.dump id type x y z
+      dump_modify     tempDump${nn} append yes thresh v_check > 0 refresh c_myDisplacement${nn} delay 100
+      run            10000
+      next           nn
+   jump           input-script.dat loopDD
+
+#   run ${avgOutputStep} pre yes post no
+   print "${currNumDens} ${currAvgPE} ${currAvgP} ${currPres} ${currAvgTemp} ${TrefInit} ${currVolPP} ${currAvgEnthalpy}  ${currCellA} ${currCellB} ${currCellC} ${currCellAlpha} ${currCellBeta} ${currCellGamma}" append isothermOutput.dat
+   write_data finalOutHigh-P${currPres}.dat nocoeff
+   
+   unfix mymsdF
+   unfix myrdfF
+   uncompute myrdfC
+   uncompute msd1
+   uncompute msd2
+   label loopEE
+      variable nn loop 1 1
+      uncompute msd_${nn}
+      uncompute myDisplacement${nn}
+      unfix msd_output_${nn}
+      unfix disp_output_${nn}
+      undump tempDump${nn}
+      next nn
+   jump input-script.dat loopEE
+   
+   next loopVar
+jump SELF loop2
